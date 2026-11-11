@@ -82,6 +82,13 @@ export default function Effects() {
         flashLight.current.position.copy(at)
       },
       impact(point, normal) {
+        // Below the surface of shallow water, a hit throws up a splash and leaves no mark.
+        if (runtime.waterLevel != null && point.y < runtime.waterLevel + 0.05) {
+          const at = new THREE.Vector3(point.x, runtime.waterLevel, point.z)
+          spray(at, UP, 14, '#c9dde2', 4.5, 0.028)
+          spray(at, UP, 6, '#f4fbff', 2.6, 0.045)
+          return
+        }
         spray(point, normal, 7, '#ffcf8a', 5, 0.016)
         spray(point, normal, 5, '#807a70', 2.5, 0.03)
         pos.copy(point).addScaledVector(normal, 0.012)

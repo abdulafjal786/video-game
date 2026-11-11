@@ -34,11 +34,16 @@ function Enemy({ index, spawn, nav, level, playerField }) {
     const b = brain.current
     const handle = collider.current.handle
     b.feet = () => body.current.translation().y - 0.9
-    b.alert = () => { if (b.state === 'patrol') b.state = 'chase' }
+    // On one-at-a-time levels only the current hunter can be alerted; the rest wait their turn.
+    b.alert = () => {
+      if (level.oneAtATime && runtime.hunter !== b) return
+      if (b.state === 'patrol') b.state = 'chase'
+    }
     b.damage = (amount) => {
       if (b.dead) return
       b.hp -= amount
       b.alert()
+      b.seeTimer = 0 // look for the shooter now, not at the next routine check
       if (b.hp > 0) return
       b.dead = true
       b.deadAt = runtime.time
@@ -75,10 +80,12 @@ function Enemy({ index, spawn, nav, level, playerField }) {
     eye.set(b.x, 1.5, b.z)
     chest.set(p.x, p.y + 0.25, p.z)
     if (!lands) {
-      const miss = 0.6 + Math.random() * 0.9
-      chest.x += (Math.random() - 0.5) * 2 * miss
-      chest.y += (Math.random() - 0.3) * miss
-      chest.z += (Math.random() - 0.5) * 2 * miss
+      // Push a miss clear of the body to one side, so it can't land anyway.
+      const len = Math.hypot(chest.x - eye.x, chest.z - eye.z) || 1
+      const side = (Math.random() < 0.5 ? -1 : 1) * (0.7 + Math.random() * 0.8)
+      chest.x += (-(chest.z - eye.z) / len) * side
+      chest.z += ((chest.x - eye.x) / len) * side
+      chest.y += (Math.random() - 0.3) * 0.6
     }
     dir.subVectors(chest, eye).normalize()
     const hit = world.castRayAndGetNormal(new rapier.Ray(eye, dir), 90, true, undefined, undefined, collider.current, body.current)
@@ -116,6 +123,11 @@ function Enemy({ index, spawn, nav, level, playerField }) {
       return
     }
 
+    // Safety net: an enemy pushed through the ground goes back to where it spawned.
+    if (rb.translation().y < -5) {
+      rb.setTranslation({ x: spawn.x, y: 1, z: spawn.z }, true)
+      rb.setLinvel({ x: 0, y: 0, z: 0 }, true)
+    }
     const t = rb.translation()
     b.x = t.x
     b.z = t.z
@@ -142,8 +154,11 @@ function Enemy({ index, spawn, nav, level, playerField }) {
       const fx = -Math.sin(b.yaw)
       const fz = -Math.cos(b.yaw)
       const facing = dist > 0 ? (fx * dx + fz * dz) / dist : 1
-      const canSee = dist < ENEMY.sightRange && (facing > ENEMY.fov || dist < 4 || b.state !== 'patrol')
-      b.sees = canSee && lineOfSight(b)
+      const dormant = level.oneAtATime && runtime.hunter !== b
+      const aware = b.state !== 'patrol'
+      const range = aware ? ENEMY.combatRange : ENEMY.sightRange
+      const canSee = dist < range && (aware || facing > ENEMY.fov || dist < 4)
+      b.sees = !dormant && canSee && lineOfSight(b)
       if (b.sees && b.state === 'patrol') {
         b.reaction += 0.2
         if (b.reaction >= 0.6) {
@@ -172,7 +187,10 @@ function Enemy({ index, spawn, nav, level, playerField }) {
       } else {
         if (!b.goal || Math.hypot(b.goal.x - t.x, b.goal.z - t.z) < 1.6) {
           if (b.goal) b.idle = 1 + Math.random() * 3
-          b.goal = nav.randomFree(PLAYER_SPAWN[0], PLAYER_SPAWN[1], 20)
+          // waiting enemies keep their distance from wherever the player is now
+          b.goal = level.oneAtATime
+            ? nav.randomFree(runtime.player.x, runtime.player.z, 24)
+            : nav.randomFree(PLAYER_SPAWN[0], PLAYER_SPAWN[1], 20)
           b.goalField = nav.field(b.goal.x, b.goal.z)
         }
         const w = nav.step(b.goalField, t.x, t.z)
@@ -181,7 +199,7 @@ function Enemy({ index, spawn, nav, level, playerField }) {
         speed = ENEMY.patrolSpeed
       }
     } else {
-      const holding = b.sees && dist < ENEMY.engageRange
+      const holding = b.sees && dist < (level.engageRange ?? ENEMY.engageRange)
       if (holding) {
         if (runtime.time > b.strafeUntil) {
           b.strafe = Math.random() < 0.35 ? 0 : Math.random() < 0.5 ? -1 : 1
@@ -200,7 +218,8 @@ function Enemy({ index, spawn, nav, level, playerField }) {
       }
 
       // Bursts are rationed across the squad so a crowd can't melt the player instantly.
-      if (b.sees && dist < ENEMY.sightRange && runtime.time >= b.nextBurst) {
+      const aimError = Math.abs(Math.atan2(Math.sin(toPlayerYaw - b.yaw), Math.cos(toPlayerYaw - b.yaw)))
+      if (b.sees && dist < ENEMY.combatRange && aimError < 0.35 && runtime.time >= b.nextBurst) {
         if (b.burst <= 0 && runtime.time >= runtime.nextEnemyShot) {
           b.burst = 3
           runtime.nextEnemyShot = runtime.time + 0.55
@@ -291,7 +310,29 @@ export default function Enemies({ level, nav }) {
     return out
   }, [level, nav])
 
+  // One-at-a-time levels: when there's no live hunter, wait a moment, then send the nearest enemy.
+  function pickHunter() {
+    const current = runtime.hunter
+    if (current && !current.dead) return
+    if (!runtime.nextHunterAt) {
+      runtime.nextHunterAt = runtime.time + (current ? level.huntDelay ?? 2.5 : 3)
+      return
+    }
+    if (runtime.time < runtime.nextHunterAt) return
+    const p = runtime.player
+    const alive = [...runtime.hitboxes.values()]
+    if (!alive.length) return
+    alive.sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))
+    const next = alive[0]
+    runtime.hunter = next
+    runtime.nextHunterAt = 0
+    next.state = 'chase' // the hunter knows where you are and comes straight for you
+    next.seeTimer = 0
+    useGame.getState().showToast(current ? 'The next one is coming' : 'One of them is coming for you')
+  }
+
   useFrame((_, dt) => {
+    if (level.oneAtATime) pickHunter()
     timer.current -= dt
     if (timer.current > 0) return
     timer.current = 0.3

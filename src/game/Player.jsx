@@ -35,7 +35,7 @@ export default function Player() {
 
   const view = useRef({
     yaw: -Math.PI / 2, pitch: -0.05, camDist: CAM_DIST,
-    nextShot: 0, reloadEnd: 0, kick: 0, firing: 0, searching: null, searchT: 0,
+    nextShot: 0, reloadEnd: 0, kick: 0, firing: 0,
     moveYaw: 0, speed: 0, heldQ: false, heldR: false, dry: 0,
   })
 
@@ -112,47 +112,17 @@ export default function Player() {
     useGame.setState({ mag: g.mag + n, reserve: g.reserve - n, reloading: false })
   }
 
-  function handleSearch(dt, v, x, z) {
-    let best = null
-    let bestD = PLAYER.searchRange
-    for (const s of runtime.spots) {
-      if (s.opened) continue
-      const d = Math.hypot(s.x - x, s.z - z)
-      if (d < bestD) { bestD = d; best = s }
-    }
-    const g = useGame.getState()
-    if (!best) {
-      v.searching = null
-      v.searchT = 0
-      g.setPrompt(null)
-      return
-    }
-    if (pressed('KeyE')) {
-      if (v.searching !== best) { v.searching = best; v.searchT = 0 }
-      v.searchT += dt
-      if (v.searchT >= PLAYER.searchTime) {
-        best.opened = true
-        v.searching = null
-        v.searchT = 0
-        g.takeLoot(best.contents)
-        sfx.loot()
-        g.setPrompt(null)
-        return
-      }
-      g.setPrompt('Searching', Math.round((v.searchT / PLAYER.searchTime) * 20) / 20)
-    } else {
-      v.searching = null
-      v.searchT = 0
-      g.setPrompt('Hold E to search crate')
-    }
-  }
-
   useFrame((state, rawDt) => {
     const b = body.current
     if (!b) return
     const dt = Math.min(rawDt, 0.05)
     const g = useGame.getState()
     const v = view.current
+    // Safety net: if a physics glitch ever drops the player through the ground, put them back at the start.
+    if (b.translation().y < -5) {
+      b.setTranslation({ x: PLAYER_SPAWN[0], y: 1, z: PLAYER_SPAWN[1] }, true)
+      b.setLinvel({ x: 0, y: 0, z: 0 }, true)
+    }
     const t = b.translation()
     const playing = g.phase === 'playing'
 
@@ -173,7 +143,6 @@ export default function Player() {
     if (playing && (f || r)) {
       const sprint = pressed('ShiftLeft') && f > 0 && !mouse.down && !g.reloading
       speed = sprint ? PLAYER.sprint : PLAYER.walk
-      if (v.searching) speed *= 0.3
       const fx = -Math.sin(v.yaw)
       const fz = -Math.cos(v.yaw)
       const len = Math.hypot(f, r)
@@ -193,40 +162,37 @@ export default function Player() {
     runtime.player.moving = speed
 
     if (playing) {
-      if (g.hasGun) {
-        const now = runtime.time
-        if (g.mag + g.reserve === 0) {
-          v.dry += dt
-          if (v.dry >= RIFLE.scavengeDelay) {
-            v.dry = 0
-            useGame.setState({ reserve: RIFLE.scavengeRounds })
-            g.showToast('Found a few loose rounds')
-          }
-        } else v.dry = 0
-        if (g.reloading && now >= v.reloadEnd) finishReload()
-        if (pressed('KeyR')) {
-          if (!v.heldR) startReload(now, v)
-          v.heldR = true
-        } else v.heldR = false
-        if (mouse.down && !g.reloading) {
-          if (g.mag > 0 || now >= v.nextShot) fire(now, v)
-          if (useGame.getState().mag === 0 && useGame.getState().reserve > 0) startReload(now, v)
+      const now = runtime.time
+      if (g.mag + g.reserve === 0) {
+        v.dry += dt
+        if (v.dry >= RIFLE.scavengeDelay) {
+          v.dry = 0
+          useGame.setState({ reserve: RIFLE.scavengeRounds })
+          g.showToast('Found a few loose rounds')
         }
+      } else v.dry = 0
+      if (g.reloading && now >= v.reloadEnd) finishReload()
+      if (pressed('KeyR')) {
+        if (!v.heldR) startReload(now, v)
+        v.heldR = true
+      } else v.heldR = false
+      if (mouse.down && !g.reloading) {
+        if (g.mag > 0 || now >= v.nextShot) fire(now, v)
+        if (useGame.getState().mag === 0 && useGame.getState().reserve > 0) startReload(now, v)
       }
       if (pressed('KeyQ')) {
         if (!v.heldQ && g.useTools()) sfx.loot()
         v.heldQ = true
       } else v.heldQ = false
-      handleSearch(dt, v, t.x, t.z)
     }
 
     v.firing = Math.max(0, v.firing - dt)
-    belt.visible = g.hasBelt
+    belt.visible = true
 
     soldier.update(dt, {
       x: t.x, y: t.y - 0.9, z: t.z,
       speed, moveYaw: v.moveYaw, aimYaw: v.yaw, aimPitch: v.pitch,
-      armed: g.hasGun, firing: v.firing > 0, kick: v.kick, reloading: g.reloading, dead,
+      armed: true, firing: v.firing > 0, kick: v.kick, reloading: g.reloading, dead,
     })
     v.kick = 0
 

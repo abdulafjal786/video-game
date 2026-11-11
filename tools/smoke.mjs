@@ -1,4 +1,4 @@
-// Plays the game in real Chrome: start, search crates, fight, die, retry, finish both levels.
+// Plays the game in real Chrome: start armed, fight, die, retry, finish both levels.
 // Run with the dev server up: npm run dev, then node tools/smoke.mjs
 import { chromium } from 'playwright-core'
 
@@ -19,8 +19,7 @@ const state = () => page.evaluate(() => {
   const p = __g.runtime.player
   return {
     phase: s.phase, level: s.level, kills: s.kills, target: s.target,
-    hp: Math.round(s.health), armor: Math.round(s.armor), gun: s.hasGun, belt: s.hasBelt,
-    tools: s.toolCharges, mag: s.mag, res: s.reserve, y: +p.y.toFixed(2),
+    hp: Math.round(s.health), armor: Math.round(s.armor), tools: s.toolCharges, mag: s.mag, res: s.reserve, y: +p.y.toFixed(2),
   }
 })
 const shot = (n) => page.screenshot({ path: `tools/shots/${n}.png`, timeout: 60000 })
@@ -29,7 +28,6 @@ const god = (on) => page.evaluate((v) => {
   window.__orig ??= g.getState().damagePlayer
   g.setState({ damagePlayer: v ? () => {} : window.__orig })
 }, on)
-const teleport = (x, z) => page.evaluate(([a, b]) => __g.runtime.player.body.setTranslation({ x: a, y: 1, z: b }, true), [x, z])
 
 await page.goto('http://localhost:5199/')
 await page.waitForFunction(() => window.__g?.runtime.player.view, null, { timeout: 90000 })
@@ -46,22 +44,13 @@ await page.keyboard.up('KeyW')
 console.log('moved', +((await page.evaluate(() => __g.runtime.player.x)) - x0).toFixed(2), await state())
 await shot('02-start')
 
-// search every crate with the real E key
-const spots = await page.evaluate(() => __g.runtime.spots.map((s) => ({ id: s.id, x: s.x, z: s.z, c: s.contents })))
-console.log('loot', spots.map((s) => s.c).join(' '))
+// the player starts armed: one real click should fire a round
+const before = (await state()).mag
+await page.mouse.down()
+await page.waitForTimeout(150)
+await page.mouse.up()
+console.log('first click fired', before - (await state()).mag, 'rounds')
 await god(true)
-for (const s of spots) {
-  await teleport(s.x - 1.1, s.z + 0.9)
-  await page.waitForTimeout(120)
-  if (s.c === 'gun') {
-    await page.waitForTimeout(250)
-    await shot('03-prompt')
-  }
-  await page.keyboard.down('KeyE')
-  await page.waitForFunction((id) => __g.runtime.spots[id].opened, s.id, { timeout: 8000 })
-  await page.keyboard.up('KeyE')
-}
-console.log('searched', await state())
 
 const fps = await page.evaluate(() => new Promise((r) => {
   let n = 0
@@ -71,48 +60,69 @@ const fps = await page.evaluate(() => new Promise((r) => {
 }))
 console.log('fps with', await page.evaluate(() => __g.runtime.hitboxes.size), 'enemies:', fps)
 
-// fight: aim at the nearest live enemy from close range, firing with the real mouse button
+// fight: stand near the nearest live enemy, aim through the over-the-shoulder camera,
+// and hold the real mouse button only while the crosshair is on target
 async function fight(limit) {
-  await page.mouse.down()
   const start = Date.now()
   let n = 0
+  let down = false
+  const fire = async (on) => {
+    if (on === down) return
+    down = on
+    if (on) await page.mouse.down()
+    else await page.mouse.up()
+  }
   while (Date.now() - start < limit) {
     const s = await state()
     if (s.phase !== 'playing' || s.kills >= s.target) break
-    await page.evaluate(() => {
+    const off = await page.evaluate(() => {
       const r = __g.runtime
       const p = r.player
+      const v = p.view
       const list = [...r.hitboxes.values()]
-      if (!list.length) return
+      if (!list.length) return 9
       const e = list.sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))[0]
       if (Math.hypot(e.x - p.x, e.z - p.z) > 6) {
         p.body.setTranslation({ x: e.x - 3, y: 1, z: e.z + 2 }, true)
+        return 9
       }
-      const nx = e.x - p.x
-      const nz = e.z - p.z
-      p.view.yaw = Math.atan2(-nx, -nz)
-      p.view.pitch = -0.02
+      const px = p.x + Math.cos(v.yaw) * 0.62
+      const pz = p.z - Math.sin(v.yaw) * 0.62
+      const want = Math.atan2(-(e.x - px), -(e.z - pz))
+      const d = Math.atan2(Math.sin(want - v.yaw), Math.cos(want - v.yaw))
+      v.yaw += d * 0.6
+      v.pitch = Math.atan2(1.25 - (p.y - 0.9 + 1.52), Math.hypot(e.x - px, e.z - pz))
+      return Math.abs(d)
     })
-    if (s.mag <= 3) await page.keyboard.press('KeyR')
+    if (s.mag <= 2 && s.res > 0) {
+      await fire(false)
+      await page.keyboard.press('KeyR')
+      await page.waitForTimeout(1950)
+      continue
+    }
+    await fire(off < 0.06)
     if (n++ === 25) await shot('04-fight')
-    await page.waitForTimeout(60)
+    await page.waitForTimeout(50)
   }
-  await page.mouse.up()
+  await fire(false)
 }
 
-await fight(90000)
-console.log('fought', await state())
-await shot('05-after-fight')
-await page.waitForFunction(() => __g.useGame.getState().phase === 'cleared', null, { timeout: 8000 })
-await shot('06-cleared')
-await page.click('button.primary')
-await page.waitForTimeout(2500)
-console.log('level2', await state())
-await shot('07-level2')
-await fight(120000)
-await page.waitForFunction(() => __g.useGame.getState().phase === 'won', null, { timeout: 8000 }).catch(() => {})
+// every level in turn: fight to the target, then the clear screen (or the win screen after the last)
+for (let level = 1; ; level++) {
+  await fight(300000)
+  console.log(`level${level} fought`, await state())
+  await shot(`0${level}-fight-done`)
+  const phase = await page.waitForFunction(
+    () => ['cleared', 'won'].includes(__g.useGame.getState().phase) && __g.useGame.getState().phase,
+    null, { timeout: 8000 },
+  ).then((h) => h.jsonValue())
+  await shot(`0${level}-${phase}`)
+  if (phase === 'won') break
+  await page.click('button.primary')
+  await page.waitForTimeout(3000)
+  console.log(`level${level + 1} start`, await state())
+}
 console.log('end', await state())
-await shot('08-end')
 
 // death and retry path
 await god(false)

@@ -5,6 +5,7 @@ import { CuboidCollider, RigidBody } from '@react-three/rapier'
 import * as THREE from 'three'
 import { HALL } from './config'
 import { runtime } from './store'
+import Forest from './Forest'
 
 const pbr = (name) => ({
   map: `/tex/${name}_diff.jpg`,
@@ -116,6 +117,10 @@ function FloorMarks() {
 }
 
 export default function World({ level }) {
+  return level.env ? <Forest level={level} /> : <Shed level={level} />
+}
+
+function Shed({ level }) {
   const { mood, layout } = level
   const surfaces = {
     concrete: useSurface('concrete_floor_02'),

@@ -1,4 +1,4 @@
-// Records a demo run of Level 1. A script drives the real keyboard and mouse controls,
+// Records a demo run of Level 1, from the Start click to the clear screen. A script drives the real keyboard and mouse controls,
 // steers by setting the aim directly, and has player damage off so the take finishes.
 // Run with the dev server up: npm run dev, then node tools/demo.mjs
 import { chromium } from 'playwright-core'
@@ -26,62 +26,27 @@ await shot('menu')
 await page.click('button.primary')
 await page.waitForTimeout(800)
 
-// Put the gear in a fixed route so the take is short and repeatable.
-await page.evaluate(() => {
-  const g = __g.useGame
-  g.setState({ damagePlayer: () => {} })
-  const s = __g.runtime.spots
-  const swap = (item, i) => {
-    const from = s.find((x) => x.contents === item)
-    const held = s[i].contents
-    s[i].contents = item
-    from.contents = held
-  }
-  swap('gun', 0)
-  swap('belt', 2)
-  swap('tools', 4)
+await page.evaluate(() => __g.useGame.setState({ damagePlayer: () => {} }))
+
+// With nobody in sight, turn toward the nearest live enemy and walk at it.
+let walking = false
+const setWalk = async (on) => {
+  if (on === walking) return
+  walking = on
+  if (on) await page.keyboard.down('KeyW')
+  else await page.keyboard.up('KeyW')
+}
+const approach = () => page.evaluate(() => {
+  const r = __g.runtime
+  const p = r.player
+  const v = p.view
+  const list = [...r.hitboxes.values()]
+  if (!list.length) return
+  const e = list.sort((a, b) => Math.hypot(a.x - p.x, a.z - p.z) - Math.hypot(b.x - p.x, b.z - p.z))[0]
+  const want = Math.atan2(-(e.x - p.x), -(e.z - p.z))
+  v.yaw += Math.atan2(Math.sin(want - v.yaw), Math.cos(want - v.yaw)) * 0.25
+  v.pitch += (-0.04 - v.pitch) * 0.2
 })
-
-const steer = (x, z, rate = 0.3) => page.evaluate(([tx, tz, k]) => {
-  const p = __g.runtime.player
-  const want = Math.atan2(-(tx - p.x), -(tz - p.z))
-  const d = Math.atan2(Math.sin(want - p.view.yaw), Math.cos(want - p.view.yaw))
-  p.view.yaw += d * k
-  p.view.pitch += (-0.06 - p.view.pitch) * 0.2
-  return Math.hypot(tx - p.x, tz - p.z)
-}, [x, z, rate])
-
-async function walkTo(x, z, stop) {
-  await page.keyboard.down('KeyW')
-  for (let i = 0; i < 300; i++) {
-    if ((await steer(x, z)) < stop) break
-    await page.waitForTimeout(40)
-  }
-  await page.keyboard.up('KeyW')
-}
-
-async function search(id, name) {
-  await page.waitForTimeout(350)
-  await shot(`${name}-prompt`)
-  await page.keyboard.down('KeyE')
-  await page.waitForTimeout(600)
-  await shot(`${name}-searching`)
-  await page.waitForFunction((i) => __g.runtime.spots[i].opened, id, { timeout: 8000 })
-  await page.keyboard.up('KeyE')
-  await page.waitForTimeout(450)
-  await shot(`${name}-found`)
-  await page.waitForTimeout(700)
-}
-
-await page.waitForTimeout(500)
-await shot('start')
-await walkTo(-22, 7, 1.7)
-await search(0, 'gun')
-await walkTo(-13, -5, 1.7)
-await search(2, 'belt')
-await walkTo(-8.5, -8.6, 1)
-await walkTo(2, -8, 1.7)
-await search(4, 'tools')
 
 // Aim through the camera pivot, which sits off the shoulder.
 const aim = () => page.evaluate(() => {
@@ -110,7 +75,6 @@ const state = () => page.evaluate(() => {
 const started = Date.now()
 let firing = false
 let lastLure = 0
-let shots = 0
 let lastKills = 0
 const setFire = async (on) => {
   if (on === firing) return
@@ -123,7 +87,6 @@ while (Date.now() - started < 170000) {
   if (s.phase !== 'playing' || s.kills >= 10) break
   if (s.kills !== lastKills) {
     lastKills = s.kills
-    if (s.kills === 1 || s.kills === 5) await shot(`fight-${s.kills}`)
   }
   if (s.mag <= 2) {
     await setFire(false)
@@ -133,23 +96,27 @@ while (Date.now() - started < 170000) {
   }
   const a = await aim()
   if (a && a.off < 0.05 && a.dist < 26) {
+    await setWalk(false)
     await setFire(true)
-    if (shots++ === 12) await shot('fight')
   } else if (!a) {
     await setFire(false)
-    // a short burst draws anyone still patrolling
-    if (Date.now() - lastLure > 4000) {
+    await setWalk(true)
+    await approach()
+    // a short burst now and then draws anyone still patrolling
+    if (Date.now() - lastLure > 6000) {
       lastLure = Date.now()
       await page.mouse.down()
       await page.waitForTimeout(140)
       await page.mouse.up()
     }
   } else {
+    await setWalk(false)
     await setFire(false)
   }
   await page.waitForTimeout(40)
 }
 await setFire(false)
+await setWalk(false)
 console.log('fight ended', await state(), `${Math.round((Date.now() - started) / 1000)}s`)
 await page.waitForFunction(() => __g.useGame.getState().phase === 'cleared', null, { timeout: 8000 }).catch(() => console.log('not cleared'))
 await page.waitForTimeout(600)

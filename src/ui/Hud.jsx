@@ -40,7 +40,7 @@ function DemoPlayer({ onClose }) {
           <button className="secondary small" onClick={onClose}>Close</button>
         </div>
         <video src="/demo/how-to-play.mp4" poster="/demo/poster.jpg" controls autoPlay muted playsInline />
-        <p className="body">Silent recording of Level 1: search the crates, then kill 10. Your crates will be different.</p>
+        <p className="body">Silent recording of Level 1: aim, fire, and kill 10 to clear it.</p>
       </div>
     </div>
   )
@@ -49,7 +49,7 @@ function DemoPlayer({ onClose }) {
 function Controls() {
   const rows = [
     ['W A S D', 'Move'], ['Shift', 'Sprint'], ['Mouse', 'Aim'], ['Left click', 'Fire'],
-    ['E (hold)', 'Search crate'], ['R', 'Reload'], ['Q', 'Use tools'], ['Esc', 'Pause'],
+    ['R', 'Reload'], ['Q', 'Use tools'], ['Esc', 'Pause'],
   ]
   return (
     <dl className="controls">
@@ -120,11 +120,6 @@ function HurtFlash() {
 
 const closeDemo = () => useGame.getState().setDemoOpen(false)
 
-function objective(s) {
-  if (!s.hasGun) return 'Search the crates for a rifle'
-  return `Kill ${s.target - s.kills} more`
-}
-
 function Hud() {
   const s = useGame()
   const lvl = LEVELS[s.level]
@@ -137,35 +132,25 @@ function Hud() {
           <div className="top">
             <div>
               <p className="kicker">Level {s.level + 1}: {lvl.name}</p>
-              <p className="objective">{objective(s)}</p>
+              <p className="objective">Kill {s.target - s.kills} more</p>
             </div>
             <div className="kills"><strong>{s.kills}</strong><span>/ {s.target}</span></div>
           </div>
-          {s.hasGun && <Crosshair />}
+          <Crosshair />
           <HurtFlash />
           <Toast />
-          {s.prompt && (
-            <div className="prompt">
-              {s.prompt}
-              {s.search > 0 && <div className="progress"><div style={{ width: `${s.search * 100}%` }} /></div>}
-            </div>
-          )}
           <div className="bottom">
             <div className="vitals">
               <Bar label="Health" value={s.health} max={PLAYER.maxHealth} tone={s.health < 30 ? 'low' : 'ok'} />
-              {s.hasBelt && <Bar label="Belt" value={s.armor} max={PLAYER.maxArmor} tone="armor" />}
+              <Bar label="Belt" value={s.armor} max={PLAYER.maxArmor} tone="armor" />
             </div>
             <div className="gear">
-              <Slot on={s.hasGun} label="Rifle" />
-              <Slot on={s.hasBelt} label="Belt" />
-              <Slot on={s.hasTools && s.toolCharges > 0} label="Tools" count={s.toolCharges} />
+              <Slot on={s.toolCharges > 0} label="Tools (Q)" count={s.toolCharges} />
             </div>
-            {s.hasGun && (
-              <div className="ammo">
-                {s.reloading ? <span className="reloading">Reloading</span> : <strong>{s.mag}</strong>}
-                <span>/ {s.reserve}</span>
-              </div>
-            )}
+            <div className="ammo">
+              {s.reloading ? <span className="reloading">Reloading</span> : <strong>{s.mag}</strong>}
+              <span>/ {s.reserve}</span>
+            </div>
           </div>
         </>
       )}
@@ -174,7 +159,7 @@ function Hud() {
         <Screen
           kicker="Third-person shooter"
           title="Dead Freight"
-          body="You wake up unarmed in a freight shed full of hostile contractors. Search the crates for a rifle, a safety belt and tools, then fight your way out."
+          body="Hostile contractors hold a freight yard. You have a rifle, a safety belt and tools. Clear the shed, the night shift, the forest, then a flooded marsh where they come one at a time."
           action="start"
           label="Start"
           footer={<button className="secondary" onClick={() => s.setDemoOpen(true)}>Demo</button>}
@@ -190,7 +175,7 @@ function Hud() {
         <Screen
           kicker={`Level ${s.level + 1} clear`}
           title={`${s.kills} down`}
-          body={`Level ${s.level + 2} has ${LEVELS[s.level + 1].target} of them, and the lights are off. You keep your gear.`}
+          body={`${LEVELS[s.level + 1].intro} Your health, belt, ammo and tools are refilled.`}
           action="nextLevel"
           label="Next level"
         />
@@ -205,7 +190,7 @@ function Hud() {
         />
       )}
       {s.phase === 'won' && (
-        <Screen kicker="Both levels clear" title="You win" body="Nobody left in the shed but you." action="start" label="Play again" />
+        <Screen kicker={`All ${LEVELS.length} levels clear`} title="You win" body="Nobody left standing but you." action="start" label="Play again" />
       )}
     </div>
   )

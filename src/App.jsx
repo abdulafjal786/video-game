@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useMemo } from 'react'
-import { Canvas } from '@react-three/fiber'
+import { Canvas, useThree } from '@react-three/fiber'
 import { Physics } from '@react-three/rapier'
 import { Bloom, EffectComposer, SMAA, ToneMapping, Vignette } from '@react-three/postprocessing'
 import { ToneMappingMode } from 'postprocessing'
@@ -7,7 +7,6 @@ import * as THREE from 'three'
 import World from './game/World'
 import Player from './game/Player'
 import Enemies from './game/Enemies'
-import Crates, { rollLoot } from './game/Crates'
 import Effects from './game/Effects'
 import { HALL, LEVELS } from './game/config'
 import { NavGrid } from './game/nav'
@@ -17,27 +16,29 @@ import Hud from './ui/Hud'
 
 function Stage({ runId, levelIndex }) {
   const level = LEVELS[levelIndex]
-  const spots = useMemo(() => {
-    const s = rollLoot(level)
-    runtime.spots = s
+  useMemo(() => {
     runtime.noise = null
     runtime.nextEnemyShot = 0
     runtime.time = 0
-    return s
+    runtime.hunter = null
+    runtime.nextHunterAt = 0
   }, [runId, level])
-  const nav = useMemo(() => new NavGrid([
-    ...level.layout,
-    ...level.spots.map(([x, z]) => ({ x, z, w: 1.2, d: 1.2 })),
-  ]), [level])
+  const nav = useMemo(() => new NavGrid(level.layout), [level])
 
   return (
     <>
       <World level={level} />
-      <Crates spots={spots} />
       <Player />
       <Enemies level={level} nav={nav} />
     </>
   )
+}
+
+// Development only: lets the browser test scripts in tools/ reach the 3D scene.
+function DevHooks() {
+  const scene = useThree((s) => s.scene)
+  if (import.meta.env.DEV) window.__g.scene = scene
+  return null
 }
 
 export default function App() {
@@ -71,6 +72,7 @@ export default function App() {
             <Stage key={runId} runId={runId} levelIndex={level} />
           </Physics>
           <Effects />
+          {import.meta.env.DEV && <DevHooks />}
           <EffectComposer multisampling={0}>
             <Bloom mipmapBlur intensity={0.45} luminanceThreshold={1} luminanceSmoothing={0.2} />
             <ToneMapping mode={ToneMappingMode.AGX} />
